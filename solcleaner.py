@@ -6,6 +6,7 @@ from telethon.tl.types import Channel
 from telethon.tl.functions.updates import GetChannelDifferenceRequest
 from telethon.tl.functions.messages import EditMessageRequest
 from telethon.tl.functions.channels import DeleteMessagesRequest
+from telethon.tl.functions.channels import GetMessagesRequest
 from telethon.tl.functions.messages import SendMessageRequest
 
 from telethon.tl.types import ChannelMessagesFilterEmpty
@@ -13,9 +14,12 @@ from telethon.tl.types.updates import ChannelDifference
 from telethon.tl.types.updates import ChannelDifferenceEmpty
 from telethon.tl.types.updates import ChannelDifferenceTooLong
 from telethon.tl.types import Message
+from telethon.tl.types import UpdateNewChannelMessage
 
 from telethon.errors import FloodWaitError
 from telethon.utils import get_input_peer
+
+import sys
 
 from time import sleep
 import threading
@@ -24,11 +28,11 @@ from urllib.request import urlopen
 
 print('initialize')
 
-api_id = 12345
-api_hash = '12345789abcefg'
-phone = '<< place here your phone number >> '
+api_id = 
+api_hash = ''
+phone = '+82'
 
-client = TelegramClient('my_session', api_id, api_hash)
+client = TelegramClient('session', api_id, api_hash)
 print('try connect')
 client.connect()
 print('connected')
@@ -40,11 +44,13 @@ if not client.is_user_authorized():
 
 print('authenticated')
 
+# fetch all chnanels
 (dialogs, user_or_chats) = client.get_dialogs()
 dest_channels = []
 
 class DestChannel:
     pts = None
+    last_clean = None
     channel = None
 
     def __init__(self, pts, channel):
@@ -52,7 +58,16 @@ class DestChannel:
         self.channel = channel
 
     def get_updates(self, client: TelegramClient):
-        updates = client.invoke(GetChannelDifferenceRequest(get_input_peer(self.channel), ChannelMessagesFilterEmpty(), self.pts, -1))
+        updates = None
+        while updates is None:
+            try:
+                updates = client.invoke(GetChannelDifferenceRequest(get_input_peer(self.channel), ChannelMessagesFilterEmpty(), self.pts, -1))
+            except:
+                print(sys.exc_info()[0])
+                print('reconnecting...')
+                client.disconnect()
+                client.connect()
+        
         if type(updates) is ChannelDifference:
             self.pts = updates.pts
             return updates
@@ -88,21 +103,23 @@ class SolCleaner:
     channel = None
     msg = None
     me_id = None
+    destChannel = None
 
     scanned = 0
     deleted = 0
     offset_id = 0
     current_date = None
-    limit = 90
+    limit = 95
 
     del_list = []
 
-    def __init__(self, client: TelegramClient, msg: Message, channel: Channel, me_id):
+    def __init__(self, client: TelegramClient, msg: Message, channel: DestChannel, me_id):
         self.client = client
         self.msg = msg
-        self.channel = channel
+        self.channel = channel.channel
         self.me_id = me_id
-
+        self.destChannel = channel
+	
     def run(self):
         self.update('실행 대기중...', True)
         quit = False
@@ -122,7 +139,7 @@ class SolCleaner:
                     self.client.disconnect()
                     self.client.connect()
                 except FloodWaitError as e:
-                    sleep(e.seconds + 2)
+                    sleep(e.seconds + 1)
 
             min_id = None
 
@@ -151,10 +168,11 @@ class SolCleaner:
 
         self.flush_delete()
         self.update('종료됨', True)
-        sleep(10)
+        sleep(5)
         self.edit('#솔클리너포인트')
         self.flush_delete(False)
         print('done.')
+        self.destChannel.last_clean = datetime.datetime.now()
 
     def flush_delete(self, with_update=True):
         while True:
@@ -167,7 +185,7 @@ class SolCleaner:
                 self.client.connect()
             except FloodWaitError as e:
                 print('flood error occurred, waiting...')
-                sleep(e.seconds + 2)
+                sleep(e.seconds + 1)
         self.del_list.clear()
         if with_update: self.update('작동중')
 
@@ -195,43 +213,58 @@ class SolCleaner:
             except FloodWaitError as e:
                 if not force: break
                 print('flood error occurred, waiting...')
-                sleep(e.seconds + 2)
+                sleep(e.seconds + 1)
 
-    def delete(self, msg_id):
+    def delete(self, msg_id, with_update=True):
         self.del_list.append(msg_id)
         if len(self.del_list) >= self.limit:
-            self.flush_delete()
+            self.flush_delete(with_update)
 
 
-def edit_message(msg: Message, text: str):
-    EditMessageRequest(msg, str)
+def edit_message(client: TelegramClient, channel: Channel, msg: Message, text: str):
+    while True:
+        try:
+            client.invoke(EditMessageRequest(get_input_peer(channel), msg.id, message=text))
+            break
+        except ValueError:
+            client.disconnect()
+            client.connect()
+        except FloodWaitError as e:
+            print('flood error occurred, waiting...')
+            sleep(e.seconds + 1)
 
 me_id = client.get_me().id
+print(client.get_me())
 print('me_id = %d' % me_id)
 
+msgs_count = {}
+limit_count = 30
+
 while waiter.work:
-    sleep(0.1)
+    sleep(0.01)
     for dest_channel in dest_channels:
         updates = dest_channel.get_updates(client)
         if updates is None: continue
         elif type(updates) is ChannelDifference:
             for msg in updates.new_messages:
                 if (msg.from_id == me_id or msg.from_id is None) and hasattr(msg, 'message'):
+                    if dest_channel in msgs_count:
+                        if msgs_count[dest_channel] == -2:
+                            msgs_count[dest_channel] = -1
+                        else:
+                            msgs_count[dest_channel] = 0
+                            print('messgae count resetted: %s' % (dest_channel.channel.title))
+                        
                     if '#솔클리너실행' in msg.message:
                         print('command detected, start cleaning...')
-                        SolCleaner(client, msg, dest_channel.channel, me_id).run()
-                    elif '#업데이트확인' in msg.message:
-                        try:
-                            url = urlopen('http://comic.naver.com/webtoon/list.nhn?titleId=119874&weekday=')
-                            html = url.read().decode('utf-8')
-                            url.close()
-                            spt = html.split('<a href="/webtoon/detail.nhn?titleId=119874&no=')
-                            toon_id = spt[1].split('&')[0]
-                            update_date = spt[2].split('<td class="num">')[1].split('</')[0]
-                            sleep(0.5)
-                            client.invoke(EditMessageRequest(get_input_peer(dest_channel.channel), msg.id, message='< 업데이트 정보 >\n%s\nhttp://comic.naver.com/webtoon/detail.nhn?titleId=119874&no=%s&weekday=tue' % (update_date, toon_id)))
-                        except:
-                            client.invoke(EditMessageRequest(get_input_peer(dest_channel.channel), msg.id, message='< 업데이트 정보 >\n일시적인 오류로 업데이트를 확인할 수 없습니다.'))
+                        SolCleaner(client, msg, dest_channel, me_id).run()
+                    elif '#최종청소시각' in msg.message:
+                        d = dest_channel.last_clean
+                        if d is None:
+                            edit_message(client, dest_channel.channel, msg, '최종 청소 시각: (N/A)')
+                        else:
+                            edit_message(client, dest_channel.channel, msg, '최종 청소 시각: %s' % d.strftime('%Y/%m/%d %H:%M:%S'))
+
 
 
 client.disconnect()
