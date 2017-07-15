@@ -4,11 +4,11 @@ mass message cleaner for telegram (inspired by hasol)
 
 ## Install dependencies
 ```
-pip install telethon
+pip install "telethon==0.11.1"
 ```
 or
 ```
-pip3 install telethon
+pip3 install telethon "telethon==0.11.1"
 ```
 
 
@@ -21,7 +21,7 @@ Open solcleaner.py, and edit these fields:
 ```
 api_id = 12345
 api_hash = '12345789abcefg'
-phone = '<< place here your phone number (include + and nation codes)>> '
+phone = '<< place here your phone number (include + and nation code)>> '
 ```
 
 ## Use
@@ -36,3 +36,5 @@ After cleaning done, '#솔클리너' message changed to '#솔클리너포인트'
 
 ### '#업데이트확인'
 This command checks last update date of webtoon 'DENMA', that published on NAVER WEBTOON.
+
+### TELEGRAM DOES NOT WORK IN CHINA
